@@ -1,87 +1,55 @@
-# ESP32 低功耗蓝牙 (BLE) 桌面副屏 · 使用指南
+# ESP32 低功耗蓝牙 (BLE) 桌面副屏 · 华硕 G-Helper & 游戏 FPS 增强版
 
-本方案为【低功耗蓝牙 (BLE)】独立开发版本，功耗仅为 WiFi 的 **1/5 ~ 1/10**，无需连接路由器，适合便携/电池供电或无 WiFi 环境。
+本方案为【低功耗蓝牙 (BLE)】独立版本，深度对接华硕 G-Helper 体系，支持游戏实时帧率 (FPS) 采集与硬件全维监控。
+
+---
+
+## 📸 核心特性
+
+- 🎮 **游戏实时帧率 (FPS)**：
+  - Windows ETW (`Microsoft-Windows-DxgKrnl`) 底层 Present 事件捕获，与 G-Helper 相同机制，0 负载测速。
+  - 支持 RTSS (RivaTuner) 共享内存与 AIDA64 多重兜底。
+  - 游戏时顶部高亮实时显示 `144 FPS`（动态变色），桌面时平滑切换为 G-Helper 性能模式（`TURBO`/`BALANCED`）或时钟。
+- 🚀 **华硕 G-Helper 深度对接**：
+  - **ASUS ATKACPI (`\\.\ATKACPI`)**：直读笔记本 EC 硬件寄存器（CPU 温度、风扇转速、性能模式）。
+  - **NVIDIA NVML (`nvml.dll`)**：底层 C 接口直读独显 GPU 温度、实时功耗 (W)、GPU 占用率。
+  - **Windows Energy Meter RAPL**：硬件级 CPU Package 功耗直读。
+- ⚡ **超低功耗与极速刷新**：
+  - 蓝牙功耗仅为 Wi-Fi 的 1/5 ~ 1/10，0.3s 极速 GATT 数据推流，无需连接路由器。
 
 ---
 
 ## 📁 目录文件清单
 
-* `06_ble_widget.ino`：ESP32 蓝牙从机固件（内置 BLE GATT 服务 + DSEG 开源 LCD 字库 + 动态配色引擎）。字库已**内联在 .ino 里，单文件自包含**——新建空白草稿直接粘贴整个文件内容也能编译。
-* `dseg_font.h`：16x24 位图字库独立副本（脚本自动生成，勿手改；已被内联进 .ino，仅作备份/再生成用）。
-* `ble_pc_sender.py`：电脑端 Python 蓝牙发射器（自动扫描 `ESP32-Dashboard` 并以 0.3s 推送硬件状态）。
-* `tools/gen_font.py`：字体生成脚本（DSEG7/DSEG14 -> dseg_font.h，改字号/字重/字符集后重跑即可）。
-* `tools/preview.py`：整屏效果模拟器（生成 `tools/preview.png`，烧录前预览配色效果）。
+* `06_ble_widget.ino`：ESP32 蓝牙从机固件（内置 BLE GATT 服务 + JetBrains Mono 现代字库 + 动态变色引擎）。
+* `ble_pc_sender.py`：电脑端 Python 蓝牙发射器（ATKACPI + NVML + ETW FPS + BLE 推流）。
+* `一键启动_BLE发送端.bat`：Windows 一键提权启动脚本。
+* `dseg_font.h`：字库独立备份。
+* `tools/`：字体生成与效果预览工具。
 
 ---
 
-## 🔤 字体方案（v4：放大版）
+## 🎨 动态配色规则
 
-当前使用开源 **JetBrains Mono Bold**（SIL OFL 1.1 许可，[github.com/JetBrains/JetBrainsMono](https://github.com/JetBrains/JetBrainsMono)），**22x33 大字模**（字高约 24px，比初版大 50%）：
-
-* 现代等宽字体：数字严格等宽（刷新不抖动）、x-height 大、小字号可读性最佳；
-* 带斜杠零（0/O 不混淆），`%` 冒号句点等符号齐全，适合仪表数值显示；
-* 修复旧手绘字库的 bug：缺 A/I/T/N/F/R 等字母（"BLE WAITING..." 曾显示为空白）、`%` 字形只画了上半截；
-* 占用率/温度显示上限 99（防 4 字符越界，只在瞬时尖峰出现且颜色已是红色）。
-
-> 换字体大小/风格：
-> ```powershell
-> cd esp32\06_ble_widget\tools
-> python gen_font.py jbmono 22 33   # 当前: 现代清晰风 22x33 (默认 16x24)
-> python gen_font.py dseg 22 33     # LCD 仪表风 22x33
-> ```
-> 生成后把 `dseg_font.h` 的内容重新粘贴进 .ino 的内联区（或改回 include 方式）。
-
-### 🎨 动态配色规则（按 i7-14650HX 笔记本标定）
-
-| 数据 | 青/绿（正常） | 黄（偏热） | 橙（高负载） | 红（危险） |
-| :--- | :--- | :--- | :--- | :--- |
-| CPU/GPU/MEM 占用率 | ≤60% 绿 | 61~85% | — | >85% |
-| CPU 温度 (14650HX) | <70°C | 70~77°C | 78~87°C | ≥88°C |
-| GPU 温度（笔记本独显） | <60°C | 60~74°C | 75~84°C | ≥85°C |
-| CPU 功率（参考 160W = PL2 157W） | <56W | — | 56~119W | ≥120W |
-| GPU 功率（参考 150W） | <52W | — | 52~112W | ≥113W |
-
-> 笔记本 HX 处理器日常游戏 80~90°C 属正常工况（TjMax 100°C），阈值据此放宽；
-> 台式机可把 CPU 档位回调为 60/75/85°C、参考功耗 130W。
-> 阈值在 `06_ble_widget.ino` 的 `temp_color(...)` 调用参数和 `pwr_color(...)` 参考功耗处修改。
-
-### 重新生成字体 / 预览效果
-
-```powershell
-cd esp32\06_ble_widget\tools
-python gen_font.py     # 重新生成 dseg_font.h（需 pip install pillow）
-python preview.py      # 生成整屏配色预览图 preview.png
-```
-
----
-
-## 🔌 硬件接线（与之前完全一致，无需改动）
-
-| 屏幕引脚 | ESP32 GPIO | 说明 |
-| :--- | :--- | :--- |
-| **VCC** | **5V (VIN)** | 必须 5V 供电 |
-| **GND** | **GND** | 严禁误插 G0/SD0 |
-| **CS** | **GPIO 4** | 片选 |
-| **RESET** | **GPIO 17**| 复位 |
-| **DC** | **GPIO 16**| 命令/数据 |
-| **MOSI** | **GPIO 23**| 数据输入 |
-| **SCK** | **GPIO 18**| 时钟 |
-| **LED** | **3.3V** | 背光电源 |
+| 指标 | 绿色/青色（正常） | 黄色/橙色（中高负载） | 红色（极限/危险） |
+| :--- | :--- | :--- | :--- |
+| **游戏 FPS** | ≥120 FPS（荧光绿） / ≥60 FPS（青色） | 30~59 FPS（黄色） | <30 FPS（红色） |
+| **CPU / GPU / MEM 占用率** | ≤60% 绿色 | 61~85% 黄色 | >85% 红色 |
+| **CPU 温度** | <70°C 青色 | 70~87°C 黄橙 | ≥88°C 红色 |
+| **GPU 温度** | <60°C 青色 | 60~84°C 黄橙 | ≥85°C 红色 |
+| **CPU 功耗 (160W标定)** | <56W 青色 | 56~119W 橙色 | ≥120W 红色 |
+| **GPU 功耗 (150W标定)** | <52W 青色 | 52~112W 橙色 | ≥113W 红色 |
 
 ---
 
 ## 🚀 使用步骤
 
-### 步骤 1：烧录 ESP32 蓝牙固件
+### 1. 烧录 ESP32 固件
 1. 打开 Arduino IDE。
-2. 打开 `esp32/06_ble_widget/06_ble_widget.ino`。
-3. 点击 **“上传”**。
-4. 屏幕上会显示：`BLE WAITING...`（等待蓝牙连接）。
+2. 打开 `06_ble_widget/06_ble_widget.ino`。
+3. 编译并上传到开发板。屏幕显示 `BLE WAITING...` 等待连接。
 
-### 步骤 2：在电脑上运行蓝牙发射器
+### 2. 电脑端一键启动
 1. 确保电脑已开启蓝牙。
-2. 打开终端（PowerShell），运行：
-   ```powershell
-   python c:\Users\Administrator\Desktop\esp32\06_ble_widget\ble_pc_sender.py
-   ```
-3. 脚本会自动搜索并连接 `ESP32-Dashboard`，副屏随即进入 **0.3 秒超低功耗极速监控模式**！
+2. 双击运行 `06_ble_widget/一键启动_BLE发送端.bat`（会自动申请管理员权限以启用华硕 EC 硬件直读与 ETW 游戏 FPS 监控）。
+3. 脚本将自动搜寻并连接 `ESP32-Dashboard`，副屏随即开启监控！

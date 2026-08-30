@@ -1,20 +1,28 @@
 # ESP32 华硕笔记本状态信息监控副屏 🖥️
 
-基于 **ESP32 + 2.4寸 TFT 彩屏 (ILI9341)** 构建的桌面硬件副屏，实时显示电脑硬件状态与网络时钟。支持 Wi-Fi HTTP、BLE 蓝牙低功耗、蓝牙串口 (SPP) 多种通信模式。
+基于 **ESP32 + 2.4寸 TFT 彩屏 (ILI9341)** 构建的桌面硬件副屏，实时显示电脑硬件状态、G-Helper 性能模式、实时游戏帧率 (FPS) 与网络时钟。支持 Wi-Fi HTTP、BLE 蓝牙低功耗、蓝牙串口 (SPP) 多种通信模式。
+
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Platform](https://img.shields.io/badge/platform-ESP32-brightgreen.svg)
+![Language](https://img.shields.io/badge/language-C%2B%2B%20%2F%20Python-orange.svg)
 
 ---
 
 ## 📸 项目特性
 
-- 🕒 **实时网络时钟**：支持 NTP 网络时间精准同步与数码管风格排版显示。
+- 🎮 **游戏实时帧率 (FPS)**：支持 Windows ETW (DxgKrnl Present) / RTSS 游戏渲染帧率直读，游戏时自动高亮显示实时帧率。
+- 🕒 **实时网络时钟 / 性能模式**：支持 NTP 网络时间同步；桌面状态下自动展示 G-Helper 当前性能模式（`TURBO`/`BALANCED`/`SILENT`）。
 - 💻 **硬件全维监控**：
   - **CPU**：占用率（进度条）、CPU Package 封装温度、实时功耗 (W)。
-  - **GPU**：GPU 温度、实时功耗 (W)。
-  - **RAM**：内存使用量 / 总量、占用率（进度条）。
-- 🚀 **华硕专属优化**：支持直读 G-Helper 与 AIDA64 传感器注册表数据，超低系统资源开销，免管理员提权。
+  - **GPU**：GPU 占用率（进度条）、GPU 温度、实时功耗 (W)。
+  - **RAM & 风扇**：内存使用率（进度条）、CPU / GPU 风扇实时转速 (RPM)。
+- 🚀 **华硕 G-Helper 深度对接**：
+  - 华硕 ATKACPI 硬件直读（`\\.\ATKACPI`），直读笔记本 EC 寄存器。
+  - NVIDIA NVML 底层直读（`nvml.dll`），毫秒级延迟，0 系统开销。
+  - Windows Energy Meter RAPL 硬件功耗直读。
 - 📡 **多通信链路支持**：
+  - **BLE 蓝牙模式 (推荐)**：0.3s 极速低功耗推流，无线免配网。
   - **Wi-Fi 模式**：ESP32 局域网 HTTP 请求 Python 本地服务。
-  - **BLE 蓝牙模式**：低功耗蓝牙广播与订阅，无线免配网。
   - **蓝牙串口 (SPP) 模式**：传统蓝牙虚拟串口高速推流。
 - ⚡ **原生直驱引擎**：内置底层 GPIO SPI 驱动，告别库配置冲突与白屏问题。
 
@@ -55,10 +63,12 @@
 │   │   └── 04_widget_ghelper.ino
 │   ├── 05_ghelper_bridge.py
 │   └── 使用说明.md
-├── 06_ble_widget/                # 阶段 6：BLE 蓝牙低功耗无线传输版（含字体工具）
+├── 06_ble_widget/                # 阶段 6 (推荐)：BLE 蓝牙低功耗版（华硕 G-Helper + 游戏 FPS）
 │   ├── 06_ble_widget.ino
 │   ├── ble_pc_sender.py
+│   ├── 一键启动_BLE发送端.bat
 │   ├── dseg_font.h
+│   ├── README.md
 │   └── tools/
 ├── 06_bt_spp_widget/             # 阶段 6 备选：经典蓝牙 SPP 串口高速推流版
 │   ├── 06_bt_spp_widget.ino
@@ -78,23 +88,17 @@
   pip install psutil wmi pywin32 bleak pyserial
   ```
 
-### 2. Wi-Fi HTTP 模式运行（阶段 4）
-1. 打开 `04_widget/04_widget.ino`，将 `ssid`、`password` 与 `pc_url` 改为你实际的 Wi-Fi 与电脑 IP：
-   ```cpp
-   const char* ssid = "你的WiFi名称";
-   const char* password = "你的WiFi密码";
-   const char* pc_url = "http://你的电脑局域网IP:8080";
-   ```
-2. 电脑端启动数据源服务：
-   ```bash
-   python 03_pc_server.py
-   ```
-3. 将 `04_widget.ino` 烧录至 ESP32 开发板，即可自动连接并刷新监控画面。
-
-### 3. BLE 蓝牙无线模式（阶段 6）
+### 2. BLE 蓝牙无线模式（阶段 6 推荐）
 1. 烧录 `06_ble_widget/06_ble_widget.ino` 至 ESP32。
-2. 电脑端双击运行 `06_ble_widget/一键启动_发送端.bat`（或执行 `python ble_pc_sender.py`），脚本将自动搜寻并连接 ESP32 进行推流。
+2. 电脑端双击运行 `06_ble_widget/一键启动_BLE发送端.bat`（自动以管理员身份运行，启用 ATKACPI 与 ETW 游戏 FPS 监控）。
+3. 脚本将自动搜寻并连接 ESP32 进行 0.3s 极速推流。
 
-### 4. 经典蓝牙 SPP 模式（阶段 6 备选）
-1. 烧录 `06_bt_spp_widget/06_bt_spp_widget.ino` 至 ESP32。
-2. 电脑端双击运行 `06_bt_spp_widget/一键启动_蓝牙串口发送端.bat`（或执行 `python bt_spp_pc_sender.py`）。
+### 3. Wi-Fi HTTP 模式（阶段 4）
+1. 打开 `04_widget/04_widget.ino`，将 `ssid`、`password` 与 `pc_url` 改为你实际的 Wi-Fi 与电脑 IP。
+2. 电脑端运行 `python 03_pc_server.py`，烧录 `04_widget.ino` 即可。
+
+---
+
+## 🛡️ 许可证
+
+本项目采用 [MIT License](LICENSE) 开源协议。

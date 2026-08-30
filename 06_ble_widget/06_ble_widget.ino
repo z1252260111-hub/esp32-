@@ -1,20 +1,16 @@
-// 阶段 4 进阶：低功耗蓝牙 (BLE) 桌面副屏摆件（JetBrains Mono 现代清晰字库 + 动态配色 + BLE GATT Server）
-// 字体: JetBrains Mono Bold (OFL-1.1, github.com/JetBrains/JetBrainsMono)
-//       由 tools/gen_font.py 自动生成, 换回LCD风格: python tools/gen_font.py dseg
-// 配色: 占用率/温度/功率 均随数值变化 (绿/青 -> 黄 -> 橙 -> 红)
+// 阶段 6：低功耗蓝牙 (BLE) 桌面副屏（华硕 G-Helper 专属 + 游戏实时 FPS 增强版）
+// 字体: JetBrains Mono Bold (现代清晰等宽风格)
+// 配色: 动态颜色算法 (占用率/温度/功耗/FPS 均随数值平滑变色)
+// 通信: BLE GATT Server 极速 0.3s 推流
+
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <ArduinoJson.h>
-// 字库已内联(单文件自包含, 直接粘贴/打开均可编译);
-// 独立文件 dseg_font.h 仍在同目录, 由 tools/gen_font.py 生成
+
 // ============================================================
-//  22x33 位图字库（脚本自动生成，勿手改）
-//  字体: JetBrains Mono Bold (现代清晰等宽风格)
-//  许可: SIL Open Font License 1.1
-//  重新生成: python tools/gen_font.py jbmono 22 33
-//  行格式: uint32_t，最高位 = 单元格最左列像素
+//  22x33 位图字库（JetBrains Mono Bold）
 // ============================================================
 #define DSEG_CELL_W 22
 #define DSEG_CELL_H 33
@@ -121,143 +117,143 @@ static const uint32_t DSEG_ALPHA[26][33] = {
   },
   { /* 'C' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
-  0x00000000, 0x00000000, 0x00000000, 0x01FC0000, 0x03FF0000, 0x07FF0000,
-  0x0F8F8000, 0x0F07C000, 0x1E03C000, 0x1E000000, 0x1E000000, 0x1E000000,
+  0x00000000, 0x00000000, 0x00000000, 0x01F80000, 0x07FE0000, 0x0FFF0000,
+  0x0F8F8000, 0x1E078000, 0x1E038000, 0x1E000000, 0x1E000000, 0x1E000000,
   0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000,
-  0x1E000000, 0x1E03C000, 0x0F078000, 0x0F8F8000, 0x07FF0000, 0x03FE0000,
-  0x01FC0000, 0x00000000, 0x00000000
+  0x1E038000, 0x1E078000, 0x1E0F8000, 0x0F9F8000, 0x0FFF0000, 0x07FE0000,
+  0x01F80000, 0x00000000, 0x00000000
   },
   { /* 'D' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
   0x00000000, 0x00000000, 0x00000000, 0x1FF80000, 0x1FFE0000, 0x1FFF0000,
-  0x1E1F8000, 0x1E078000, 0x1E078000, 0x1E03C000, 0x1E03C000, 0x1E03C000,
+  0x1E0F8000, 0x1E078000, 0x1E03C000, 0x1E03C000, 0x1E03C000, 0x1E03C000,
   0x1E03C000, 0x1E03C000, 0x1E03C000, 0x1E03C000, 0x1E03C000, 0x1E03C000,
-  0x1E03C000, 0x1E078000, 0x1E078000, 0x1E1F8000, 0x1FFF0000, 0x1FFE0000,
+  0x1E03C000, 0x1E03C000, 0x1E078000, 0x1E0F8000, 0x1FFF0000, 0x1FFE0000,
   0x1FF80000, 0x00000000, 0x00000000
   },
   { /* 'E' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
-  0x00000000, 0x00000000, 0x00000000, 0x0FFF8000, 0x0FFF8000, 0x0FFF8000,
-  0x0F000000, 0x0F000000, 0x0F000000, 0x0F000000, 0x0F000000, 0x0F000000,
-  0x0FFF0000, 0x0FFF0000, 0x0FFF0000, 0x0F000000, 0x0F000000, 0x0F000000,
-  0x0F000000, 0x0F000000, 0x0F000000, 0x0F000000, 0x0FFF8000, 0x0FFF8000,
-  0x0FFF8000, 0x00000000, 0x00000000
+  0x00000000, 0x00000000, 0x00000000, 0x1FFFC000, 0x1FFFC000, 0x1FFFC000,
+  0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000,
+  0x1FFF0000, 0x1FFF0000, 0x1FFF0000, 0x1E000000, 0x1E000000, 0x1E000000,
+  0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000, 0x1FFFC000, 0x1FFFC000,
+  0x1FFFC000, 0x00000000, 0x00000000
   },
   { /* 'F' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
   0x00000000, 0x00000000, 0x00000000, 0x1FFFC000, 0x1FFFC000, 0x1FFFC000,
   0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000,
-  0x1E000000, 0x1FFF8000, 0x1FFF8000, 0x1FFF8000, 0x1E000000, 0x1E000000,
+  0x1FFF0000, 0x1FFF0000, 0x1FFF0000, 0x1E000000, 0x1E000000, 0x1E000000,
   0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000,
   0x1E000000, 0x00000000, 0x00000000
   },
   { /* 'G' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
-  0x00000000, 0x00000000, 0x00000000, 0x01FC0000, 0x07FE0000, 0x0FFF0000,
-  0x0F8F8000, 0x1F078000, 0x1E03C000, 0x1E000000, 0x1E000000, 0x1E000000,
-  0x1E000000, 0x1E3FC000, 0x1E3FC000, 0x1E3FC000, 0x1E03C000, 0x1E03C000,
-  0x1E03C000, 0x1E03C000, 0x1F078000, 0x0F8F8000, 0x0FFF0000, 0x07FE0000,
+  0x00000000, 0x00000000, 0x00000000, 0x01F80000, 0x07FE0000, 0x0FFF0000,
+  0x0F8F8000, 0x1E078000, 0x1E038000, 0x1E000000, 0x1E000000, 0x1E000000,
+  0x1E0FC000, 0x1E0FC000, 0x1E0FC000, 0x1E03C000, 0x1E03C000, 0x1E03C000,
+  0x1E03C000, 0x1E03C000, 0x1E07C000, 0x0F8F8000, 0x0FFF8000, 0x07FE0000,
   0x01F80000, 0x00000000, 0x00000000
   },
   { /* 'H' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
-  0x00000000, 0x00000000, 0x00000000, 0x1E078000, 0x1E078000, 0x1E078000,
-  0x1E078000, 0x1E078000, 0x1E078000, 0x1E078000, 0x1E078000, 0x1E078000,
-  0x1FFF8000, 0x1FFF8000, 0x1FFF8000, 0x1E078000, 0x1E078000, 0x1E078000,
-  0x1E078000, 0x1E078000, 0x1E078000, 0x1E078000, 0x1E078000, 0x1E078000,
-  0x1E078000, 0x00000000, 0x00000000
+  0x00000000, 0x00000000, 0x00000000, 0x1E03C000, 0x1E03C000, 0x1E03C000,
+  0x1E03C000, 0x1E03C000, 0x1E03C000, 0x1E03C000, 0x1E03C000, 0x1E03C000,
+  0x1FFFFC00, 0x1FFFFC00, 0x1FFFFC00, 0x1E03C000, 0x1E03C000, 0x1E03C000,
+  0x1E03C000, 0x1E03C000, 0x1E03C000, 0x1E03C000, 0x1E03C000, 0x1E03C000,
+  0x1E03C000, 0x00000000, 0x00000000
   },
   { /* 'I' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
-  0x00000000, 0x00000000, 0x00000000, 0x0FFF8000, 0x0FFF8000, 0x0FFF8000,
+  0x00000000, 0x00000000, 0x00000000, 0x0FFC0000, 0x0FFC0000, 0x0FFC0000,
   0x00F00000, 0x00F00000, 0x00F00000, 0x00F00000, 0x00F00000, 0x00F00000,
   0x00F00000, 0x00F00000, 0x00F00000, 0x00F00000, 0x00F00000, 0x00F00000,
-  0x00F00000, 0x00F00000, 0x00F00000, 0x00F00000, 0x0FFF8000, 0x0FFF8000,
-  0x0FFF8000, 0x00000000, 0x00000000
+  0x00F00000, 0x00F00000, 0x00F00000, 0x00F00000, 0x0FFC0000, 0x0FFC0000,
+  0x0FFC0000, 0x00000000, 0x00000000
   },
   { /* 'J' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
-  0x00000000, 0x00000000, 0x00000000, 0x00078000, 0x00078000, 0x00078000,
-  0x00078000, 0x00078000, 0x00078000, 0x00078000, 0x00078000, 0x00078000,
-  0x00078000, 0x00078000, 0x00078000, 0x00078000, 0x00078000, 0x00078000,
-  0x3C078000, 0x3C078000, 0x3E0F8000, 0x1F1F0000, 0x1FFF0000, 0x0FFE0000,
-  0x03F80000, 0x00000000, 0x00000000
+  0x00000000, 0x00000000, 0x00000000, 0x001FC000, 0x001FC000, 0x001FC000,
+  0x0003C000, 0x0003C000, 0x0003C000, 0x0003C000, 0x0003C000, 0x0003C000,
+  0x0003C000, 0x0003C000, 0x0003C000, 0x0003C000, 0x0003C000, 0x0003C000,
+  0x1E03C000, 0x1E03C000, 0x1E078000, 0x0F8F0000, 0x07FE0000, 0x03FC0000,
+  0x00F00000, 0x00000000, 0x00000000
   },
   { /* 'K' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
-  0x00000000, 0x00000000, 0x00000000, 0x1E03C000, 0x1E07C000, 0x1E078000,
-  0x1E078000, 0x1E0F0000, 0x1E0F0000, 0x1E1E0000, 0x1E1E0000, 0x1E3C0000,
-  0x1FFC0000, 0x1FF80000, 0x1FFC0000, 0x1E3C0000, 0x1E3E0000, 0x1E1E0000,
-  0x1E1F0000, 0x1E0F0000, 0x1E0F8000, 0x1E078000, 0x1E078000, 0x1E03C000,
-  0x1E03E000, 0x00000000, 0x00000000
+  0x00000000, 0x00000000, 0x00000000, 0x1E03E000, 0x1E07C000, 0x1E0F8000,
+  0x1E1F0000, 0x1E3E0000, 0x1E7C0000, 0x1EF80000, 0x1FF00000, 0x1FF00000,
+  0x1FFE0000, 0x1E7F0000, 0x1E3F8000, 0x1E1F8000, 0x1E0FC000, 0x1E07E000,
+  0x1E03E000, 0x1E01F000, 0x1E00F800, 0x1E007C00, 0x1E003C00, 0x1E001E00,
+  0x1E000F00, 0x00000000, 0x00000000
   },
   { /* 'L' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
-  0x00000000, 0x00000000, 0x00000000, 0x07800000, 0x07800000, 0x07800000,
-  0x07800000, 0x07800000, 0x07800000, 0x07800000, 0x07800000, 0x07800000,
-  0x07800000, 0x07800000, 0x07800000, 0x07800000, 0x07800000, 0x07800000,
-  0x07800000, 0x07800000, 0x07800000, 0x07800000, 0x07FFC000, 0x07FFC000,
-  0x07FFC000, 0x00000000, 0x00000000
+  0x00000000, 0x00000000, 0x00000000, 0x1E000000, 0x1E000000, 0x1E000000,
+  0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000,
+  0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000,
+  0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000, 0x1FFFC000, 0x1FFFC000,
+  0x1FFFC000, 0x00000000, 0x00000000
   },
   { /* 'M' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
-  0x00000000, 0x00000000, 0x00000000, 0x1F07C000, 0x1F0FC000, 0x1F0FC000,
-  0x1F8DC000, 0x1F8DC000, 0x1D9DC000, 0x1D9DC000, 0x1DDBC000, 0x1DDBC000,
-  0x1CFBC000, 0x1CF3C000, 0x1CF3C000, 0x1C03C000, 0x1C03C000, 0x1C03C000,
-  0x1C03C000, 0x1C03C000, 0x1C03C000, 0x1C03C000, 0x1C03C000, 0x1C03C000,
-  0x1C03C000, 0x00000000, 0x00000000
+  0x00000000, 0x00000000, 0x00000000, 0x1E000780, 0x1F000F80, 0x1F801F80,
+  0x1BC03B80, 0x1DE07B80, 0x1DE07380, 0x1CF0E380, 0x1CF0E380, 0x1C79C380,
+  0x1C79C380, 0x1C3B8380, 0x1C3B8380, 0x1C1F0380, 0x1C1F0380, 0x1C0E0380,
+  0x1C0E0380, 0x1C000380, 0x1C000380, 0x1C000380, 0x1E000780, 0x1E000780,
+  0x1E000780, 0x00000000, 0x00000000
   },
   { /* 'N' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
-  0x00000000, 0x00000000, 0x00000000, 0x1F038000, 0x1F838000, 0x1F838000,
-  0x1F838000, 0x1FC38000, 0x1DC38000, 0x1FC38000, 0x1FE38000, 0x1EE38000,
-  0x1EE38000, 0x1E738000, 0x1E738000, 0x1E738000, 0x1E3B8000, 0x1E3B8000,
-  0x1E3B8000, 0x1E1F8000, 0x1E1F8000, 0x1E1F8000, 0x1E0F8000, 0x1E0F8000,
-  0x1E0F8000, 0x00000000, 0x00000000
+  0x00000000, 0x00000000, 0x00000000, 0x1E003C00, 0x1F003C00, 0x1F803C00,
+  0x1DC03C00, 0x1DE03C00, 0x1CE03C00, 0x1CF03C00, 0x1C783C00, 0x1C783C00,
+  0x1C3C3C00, 0x1C3E3C00, 0x1C1E3C00, 0x1C1F3C00, 0x1C0F3C00, 0x1C07BC00,
+  0x1C07BC00, 0x1C03DC00, 0x1C03FC00, 0x1C01FC00, 0x1E00FC00, 0x1E007C00,
+  0x1E003C00, 0x00000000, 0x00000000
   },
   { /* 'O' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
   0x00000000, 0x00000000, 0x00000000, 0x01F80000, 0x07FE0000, 0x0FFF0000,
-  0x0F8F8000, 0x1F078000, 0x1E078000, 0x1E078000, 0x1E078000, 0x1E078000,
-  0x1E078000, 0x1E078000, 0x1E078000, 0x1E078000, 0x1E078000, 0x1E078000,
-  0x1E078000, 0x1E078000, 0x1F078000, 0x0F8F8000, 0x0FFF0000, 0x07FE0000,
+  0x0F8F8000, 0x1E078000, 0x1E038000, 0x1E038000, 0x1E038000, 0x1E038000,
+  0x1E038000, 0x1E038000, 0x1E038000, 0x1E038000, 0x1E038000, 0x1E038000,
+  0x1E038000, 0x1E038000, 0x1E078000, 0x0F8F8000, 0x0FFF0000, 0x07FE0000,
   0x01F80000, 0x00000000, 0x00000000
   },
   { /* 'P' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
-  0x00000000, 0x00000000, 0x00000000, 0x1FFC0000, 0x1FFF0000, 0x1FFF8000,
-  0x1E0FC000, 0x1E03C000, 0x1E03C000, 0x1E03C000, 0x1E03C000, 0x1E03C000,
-  0x1E07C000, 0x1FFF8000, 0x1FFF0000, 0x1FFE0000, 0x1E000000, 0x1E000000,
+  0x00000000, 0x00000000, 0x00000000, 0x1FF80000, 0x1FFE0000, 0x1FFF0000,
+  0x1E0F8000, 0x1E078000, 0x1E038000, 0x1E038000, 0x1E078000, 0x1E0F8000,
+  0x1FFF0000, 0x1FFE0000, 0x1FF80000, 0x1E000000, 0x1E000000, 0x1E000000,
   0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000, 0x1E000000,
   0x1E000000, 0x00000000, 0x00000000
   },
   { /* 'Q' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
   0x00000000, 0x00000000, 0x00000000, 0x01F80000, 0x07FE0000, 0x0FFF0000,
-  0x0F8F8000, 0x1F078000, 0x1E078000, 0x1E038000, 0x1E038000, 0x1E038000,
-  0x1E038000, 0x1E038000, 0x1E038000, 0x1E038000, 0x1E038000, 0x1E038000,
-  0x1E038000, 0x1E078000, 0x1F078000, 0x0F8F8000, 0x0FFF0000, 0x07FE0000,
-  0x01FC0000, 0x001E0000, 0x001F0000
+  0x0F8F8000, 0x1E078000, 0x1E038000, 0x1E038000, 0x1E038000, 0x1E038000,
+  0x1E038000, 0x1E038000, 0x1E038000, 0x1E038000, 0x1E038000, 0x1E0F8000,
+  0x1E1F8000, 0x1E3F8000, 0x1E778000, 0x0FFF8000, 0x07FF0000, 0x01FE0000,
+  0x001FC000, 0x000FE000, 0x0007E000
   },
   { /* 'R' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
-  0x00000000, 0x00000000, 0x00000000, 0x1FFC0000, 0x1FFF0000, 0x1FFF8000,
-  0x1E0F8000, 0x1E07C000, 0x1E03C000, 0x1E03C000, 0x1E03C000, 0x1E03C000,
-  0x1E078000, 0x1FFF8000, 0x1FFF0000, 0x1FFE0000, 0x1E3C0000, 0x1E1E0000,
-  0x1E1E0000, 0x1E1F0000, 0x1E0F0000, 0x1E0F8000, 0x1E078000, 0x1E07C000,
+  0x00000000, 0x00000000, 0x00000000, 0x1FF80000, 0x1FFE0000, 0x1FFF0000,
+  0x1E0F8000, 0x1E078000, 0x1E038000, 0x1E038000, 0x1E078000, 0x1E0F8000,
+  0x1FFF0000, 0x1FFE0000, 0x1FFF0000, 0x1E0F8000, 0x1E078000, 0x1E03C000,
+  0x1E03C000, 0x1E03C000, 0x1E03C000, 0x1E03C000, 0x1E03C000, 0x1E03C000,
   0x1E03C000, 0x00000000, 0x00000000
   },
   { /* 'S' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
-  0x00000000, 0x00000000, 0x00000000, 0x01F80000, 0x07FE0000, 0x0FFF0000,
-  0x0F9F8000, 0x1E078000, 0x1E078000, 0x1E000000, 0x1F000000, 0x0F800000,
-  0x0FF80000, 0x07FE0000, 0x01FF0000, 0x001F8000, 0x00078000, 0x0003C000,
-  0x0003C000, 0x1E03C000, 0x1E07C000, 0x1F8F8000, 0x0FFF8000, 0x07FF0000,
-  0x01FC0000, 0x00000000, 0x00000000
+  0x00000000, 0x00000000, 0x00000000, 0x07FC0000, 0x0FFF0000, 0x1FFF8000,
+  0x1E078000, 0x1E038000, 0x1E000000, 0x1F000000, 0x0FE00000, 0x07FC0000,
+  0x00FE0000, 0x001F0000, 0x000F8000, 0x00078000, 0x00078000, 0x1E078000,
+  0x1E078000, 0x1E078000, 0x1F0F8000, 0x1FFF0000, 0x0FFE0000, 0x07F80000,
+  0x01E00000, 0x00000000, 0x00000000
   },
   { /* 'T' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
-  0x00000000, 0x00000000, 0x00000000, 0x3FFFC000, 0x3FFFC000, 0x3FFFC000,
+  0x00000000, 0x00000000, 0x00000000, 0x1FFFFE00, 0x1FFFFE00, 0x1FFFFE00,
   0x00F00000, 0x00F00000, 0x00F00000, 0x00F00000, 0x00F00000, 0x00F00000,
   0x00F00000, 0x00F00000, 0x00F00000, 0x00F00000, 0x00F00000, 0x00F00000,
   0x00F00000, 0x00F00000, 0x00F00000, 0x00F00000, 0x00F00000, 0x00F00000,
@@ -265,35 +261,35 @@ static const uint32_t DSEG_ALPHA[26][33] = {
   },
   { /* 'U' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
-  0x00000000, 0x00000000, 0x00000000, 0x1E078000, 0x1E078000, 0x1E078000,
-  0x1E078000, 0x1E078000, 0x1E078000, 0x1E078000, 0x1E078000, 0x1E078000,
-  0x1E078000, 0x1E078000, 0x1E078000, 0x1E078000, 0x1E078000, 0x1E078000,
-  0x1E078000, 0x1E078000, 0x1F078000, 0x0F8F8000, 0x0FFF0000, 0x07FE0000,
+  0x00000000, 0x00000000, 0x00000000, 0x1E03C000, 0x1E03C000, 0x1E03C000,
+  0x1E03C000, 0x1E03C000, 0x1E03C000, 0x1E03C000, 0x1E03C000, 0x1E03C000,
+  0x1E03C000, 0x1E03C000, 0x1E03C000, 0x1E03C000, 0x1E03C000, 0x1E03C000,
+  0x1E03C000, 0x1E03C000, 0x1E078000, 0x0F8F8000, 0x0FFF0000, 0x07FE0000,
   0x01F80000, 0x00000000, 0x00000000
   },
   { /* 'V' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
-  0x00000000, 0x00000000, 0x00000000, 0x3C03E000, 0x3C03C000, 0x1E03C000,
-  0x1E03C000, 0x1E038000, 0x1E078000, 0x0F078000, 0x0F078000, 0x0F070000,
-  0x070F0000, 0x078F0000, 0x078F0000, 0x078E0000, 0x039E0000, 0x03DE0000,
-  0x03DE0000, 0x03DC0000, 0x01DC0000, 0x01FC0000, 0x01F80000, 0x01F80000,
-  0x00F80000, 0x00000000, 0x00000000
+  0x00000000, 0x00000000, 0x00000000, 0x1E007800, 0x1E007800, 0x1E007800,
+  0x0F00F000, 0x0F00F000, 0x0F81F000, 0x0781E000, 0x0781E000, 0x07C3E000,
+  0x03C3C000, 0x03C3C000, 0x03E7C000, 0x01E78000, 0x01E78000, 0x01FF8000,
+  0x00FF0000, 0x00FF0000, 0x00FF0000, 0x007E0000, 0x007E0000, 0x003C0000,
+  0x003C0000, 0x00000000, 0x00000000
   },
   { /* 'W' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
-  0x00000000, 0x00000000, 0x00000000, 0x7870E000, 0x38F0E000, 0x38F0E000,
-  0x38F0E000, 0x38F8E000, 0x38D9E000, 0x38D9C000, 0x38D9C000, 0x38D9C000,
-  0x3DD9C000, 0x1DD9C000, 0x1D99C000, 0x1D9DC000, 0x1D9DC000, 0x1D8DC000,
-  0x1D8D8000, 0x1D8F8000, 0x1F8F8000, 0x1F8F8000, 0x0F0F8000, 0x0F0F8000,
-  0x0F0F8000, 0x00000000, 0x00000000
+  0x00000000, 0x00000000, 0x00000000, 0x1E000780, 0x1E000780, 0x1E000780,
+  0x1C000380, 0x1C000380, 0x1C000380, 0x1C0E0380, 0x1C0E0380, 0x1C1F0380,
+  0x1C1F0380, 0x1C3B8380, 0x1C3B8380, 0x1C79C380, 0x1C79C380, 0x1CF0E380,
+  0x1CF0E380, 0x1DE07380, 0x1DE07B80, 0x1BC03B80, 0x1F801F80, 0x1F000F80,
+  0x1E000780, 0x00000000, 0x00000000
   },
   { /* 'X' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
-  0x00000000, 0x00000000, 0x00000000, 0x3E03C000, 0x1E07C000, 0x0F078000,
-  0x0F0F0000, 0x078F0000, 0x079E0000, 0x03DE0000, 0x03FC0000, 0x01FC0000,
-  0x01F80000, 0x00F80000, 0x00F80000, 0x01F80000, 0x01FC0000, 0x03FE0000,
-  0x07DE0000, 0x079F0000, 0x0F8F0000, 0x0F078000, 0x1E078000, 0x1E03C000,
-  0x3C03E000, 0x00000000, 0x00000000
+  0x00000000, 0x00000000, 0x00000000, 0x1E003C00, 0x1F007C00, 0x0F80F800,
+  0x07C1F000, 0x03E3E000, 0x01F7C000, 0x00FF8000, 0x007F0000, 0x003E0000,
+  0x007F0000, 0x00FF8000, 0x01F7C000, 0x03E3E000, 0x07C1F000, 0x0F80F800,
+  0x1F007C00, 0x1E003C00, 0x1E003C00, 0x1E003C00, 0x1E003C00, 0x1E003C00,
+  0x1E003C00, 0x00000000, 0x00000000
   },
   { /* 'Y' */
   0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
@@ -349,47 +345,31 @@ static const uint32_t DSEG_MINUS[33] = {
   0x00000000,0x00000000,0x00000000
 };
 
-static const uint32_t DSEG_QMARK[33] = {
-  0x00000000,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000,
-  0x00000000,0x00000000,0x00000000,0x07F00000,0x07FC0000,0x07FE0000,
-  0x001F0000,0x000F0000,0x00070000,0x00078000,0x000F0000,0x001F0000,
-  0x01FF0000,0x01FE0000,0x01FC0000,0x01C00000,0x01C00000,0x01C00000,
-  0x00000000,0x00000000,0x00000000,0x01C00000,0x03E00000,0x03E00000,
-  0x01C00000,0x00000000,0x00000000
-};
-
-
-// 字符查找表：返回 33 行位图；adv = 绘制步进宽度(像素)
-// 空格与未知字符返回 nullptr（调用方用黑色矩形擦除）
 inline const uint32_t* dseg_glyph(char c, uint8_t* adv) {
   if (c >= '0' && c <= '9') { *adv = 22; return DSEG_DIGITS[c - '0']; }
+  if (c >= 'a' && c <= 'z') c -= 32;
   if (c >= 'A' && c <= 'Z') { *adv = 22; return DSEG_ALPHA[c - 'A']; }
   switch (c) {
     case ':': *adv = 22; return DSEG_COLON;
     case '.': *adv = 22; return DSEG_DOT;
     case '%': *adv = 22; return DSEG_PCT;
     case '-': *adv = 22; return DSEG_MINUS;
-    case '?': *adv = 22; return DSEG_QMARK;
     default:  *adv = 11;  return nullptr;
   }
 }
 
-
-
-// 纯底层直连引脚
+// 硬件引脚定义
 #define PIN_CS    4
 #define PIN_DC   16
 #define PIN_RST  17
 #define PIN_MOSI 23
 #define PIN_SCK  18
 
-// ESP32 GPIO 输出寄存器直写（极速推流）
 #define W1TS_REG (*(volatile uint32_t*)0x3FF44008)
 #define W1TC_REG (*(volatile uint32_t*)0x3FF4400C)
 #define SCK_BIT  (1u << PIN_SCK)
 #define MOSI_BIT (1u << PIN_MOSI)
 
-// BLE 服务与特征值 UUID
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
@@ -397,10 +377,6 @@ bool deviceConnected = false;
 bool oldDeviceConnected = false;
 String receivedData = "";
 bool newDataAvailable = false;
-
-// 原生 16x24 高清字库 —— 已替换为开源 DSEG 字库，见 dseg_font.h
-// (修复: 旧字库缺 A/I/T/N/F/R 等字母导致 "BLE WAITING..." 显示为空白,
-//        '%' 字形只画了上半截, B/L/W 手绘字形不规范)
 
 inline void spi_write(uint8_t data) {
   W1TC_REG = SCK_BIT; if (data & 0x80) W1TS_REG = MOSI_BIT; else W1TC_REG = MOSI_BIT; W1TS_REG = SCK_BIT;
@@ -433,7 +409,7 @@ void fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color) {
   digitalWrite(PIN_CS, HIGH);
 }
 
-void draw_char16x24(uint16_t x, uint16_t y, const uint32_t glyph[], uint16_t color) {
+void draw_char(uint16_t x, uint16_t y, const uint32_t glyph[], uint16_t color) {
   set_window(x, y, x + DSEG_CELL_W - 1, y + DSEG_CELL_H - 1);
   digitalWrite(PIN_DC, HIGH); digitalWrite(PIN_CS, LOW);
   for (int row = 0; row < DSEG_CELL_H; row++) {
@@ -446,34 +422,34 @@ void draw_char16x24(uint16_t x, uint16_t y, const uint32_t glyph[], uint16_t col
   digitalWrite(PIN_CS, HIGH);
 }
 
-void draw_text16x24(uint16_t x, uint16_t y, const char* str, uint16_t color) {
+void draw_text(uint16_t x, uint16_t y, const char* str, uint16_t color) {
   uint16_t cur_x = x;
   while (*str) {
     uint8_t adv;
     const uint32_t* glyph = dseg_glyph(*str++, &adv);
     if (glyph) {
-      draw_char16x24(cur_x, y, glyph, color);   // 字形自带黑底，覆盖旧内容
+      draw_char(cur_x, y, glyph, color);
     } else {
-      fill_rect(cur_x, y, adv, DSEG_CELL_H, 0x0000);     // 空格/未知字符: 擦除，防残影
+      fill_rect(cur_x, y, adv, DSEG_CELL_H, 0x0000);
     }
     cur_x += adv;
   }
 }
 
-// —— 动态配色：颜色随占用率/温度/功率变化 ——
-// 占用率: <=60% 绿 / <=85% 黄 / >85% 红
+// 动态变色逻辑
 uint16_t usage_color(int v) {
   return v > 85 ? 0xF800 : (v > 60 ? 0xFFE0 : 0x07E0);
 }
-// 温度(4级): <黄阈 青色(正常) / <橙阈 黄色(偏热) / <红阈 橙色(高负载) / >=红阈 红色(过热)
 uint16_t temp_color(float t, float yellow_c, float orange_c, float red_c) {
   return t >= red_c ? 0xF800 : (t >= orange_c ? 0xFDA0 :
          (t >= yellow_c ? 0xFFE0 : 0x07FF));
 }
-// 功率: <35%参考功耗 青 / <75% 橙 / >=75% 红
 uint16_t pwr_color(float w, float ref) {
   float r = w / ref;
   return r >= 0.75f ? 0xF800 : (r >= 0.35f ? 0xFDA0 : 0x07FF);
+}
+uint16_t fps_color(int fps) {
+  return fps >= 120 ? 0x07E0 : (fps >= 60 ? 0x07FF : (fps >= 30 ? 0xFFE0 : 0xF800));
 }
 
 void draw_bar(uint16_t x, uint16_t y, uint16_t w, uint16_t h, int percent, uint16_t color) {
@@ -483,7 +459,7 @@ void draw_bar(uint16_t x, uint16_t y, uint16_t w, uint16_t h, int percent, uint1
   if (w - fill_w > 0) fill_rect(x + fill_w, y, w - fill_w, h, 0x18E3);
 }
 
-// BLE 连接与写入回调
+// BLE 服务回调
 class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
       deviceConnected = true;
@@ -507,8 +483,7 @@ class MyCallbacks: public BLECharacteristicCallbacks {
 
 void setup() {
   Serial.begin(115200);
-  delay(500);
-  Serial.println("Starting BLE Ultimate Dashboard...");
+  delay(300);
 
   pinMode(PIN_CS, OUTPUT);
   pinMode(PIN_DC, OUTPUT);
@@ -516,20 +491,20 @@ void setup() {
   pinMode(PIN_MOSI, OUTPUT);
   pinMode(PIN_SCK, OUTPUT);
 
-  // 硬件复位
-  digitalWrite(PIN_RST, HIGH); delay(100);
-  digitalWrite(PIN_RST, LOW);  delay(150);
-  digitalWrite(PIN_RST, HIGH); delay(200);
+  // 硬件复位屏幕
+  digitalWrite(PIN_RST, HIGH); delay(50);
+  digitalWrite(PIN_RST, LOW);  delay(100);
+  digitalWrite(PIN_RST, HIGH); delay(150);
 
-  // 180度翻转初始化 (0xE8)
-  write_cmd(0x01); delay(150);
-  write_cmd(0x11); delay(150);
+  // 180度横屏 (0xE8)
+  write_cmd(0x01); delay(120);
+  write_cmd(0x11); delay(120);
   write_cmd(0x36); write_data(0xE8);
   write_cmd(0x3A); write_data(0x55);
   write_cmd(0x29); delay(50);
 
   fill_rect(0, 0, 320, 240, 0x0000);
-  draw_text16x24(12, 100, "BLE WAITING...", 0x07FF);
+  draw_text(12, 100, "BLE WAITING...", 0x07FF);
 
   // 初始化 BLE 服务
   BLEDevice::init("ESP32-Dashboard");
@@ -553,8 +528,9 @@ void setup() {
   pAdvertising->setMinPreferred(0x06);
   pAdvertising->setMinPreferred(0x12);
   BLEDevice::startAdvertising();
-  Serial.println("BLE Ready! Advertising as ESP32-Dashboard...");
 }
+
+int last_fps = -1;
 
 void loop() {
   if (newDataAvailable) {
@@ -568,6 +544,7 @@ void loop() {
     DeserializationError error = deserializeJson(doc, receivedData);
 
     if (!error) {
+      int fps = doc["fps"] | 0;
       int cpu = doc["cpu"] | 0;
       int mem = doc["mem"] | 0;
       float cpu_t = doc["cpu_temp"] | 0.0f;
@@ -575,44 +552,68 @@ void loop() {
       float gpu_t = doc["gpu_temp"] | 0.0f;
       float gpu_w = doc["gpu_pwr"] | 0.0f;
       int gpu_use = doc["gpu_usage"] | -1;
+      int fan_cpu = doc["fan_cpu"] | 0;
+      const char* mode = doc["mode"] | "TURBO";
       const char* t = doc["time"] | "00:00:00";
 
-      // 1. 顶部大号时钟 (居中, "HH:MM:SS" 宽 8*22=176)
-      draw_text16x24(72, 6, t, 0x07FF);
+      // 1. 顶部 Header (y = 6 ~ 39)
+      if (fps > 0) {
+        // 游戏模式: 左侧时间 (HH:MM)，右侧高亮 FPS
+        char t_short[6]; strncpy(t_short, t, 5); t_short[5] = '\0';
+        draw_text(8, 6, t_short, 0x07FF);
+
+        char fps_str[10];
+        snprintf(fps_str, sizeof(fps_str), "%3dFPS", fps > 999 ? 999 : fps);
+        draw_text(166, 6, fps_str, fps_color(fps));
+      } else {
+        // 桌面模式: 左侧完整时间 (HH:MM:SS)，右侧性能模式
+        draw_text(8, 6, t, 0x07FF);
+
+        char mode_str[8];
+        snprintf(mode_str, sizeof(mode_str), "%-5s", mode);
+        uint16_t mode_color = strcmp(mode, "TURBO") == 0 ? 0xF800 : (strcmp(mode, "FULL") == 0 ? 0xFDA0 : 0x07E0);
+        draw_text(210, 6, mode_str, mode_color);
+      }
       fill_rect(8, 43, 304, 2, 0x31A6); // 科技蓝细分割线
 
-      // 2. CPU 区域 (y=48 ~ 99)  i7-14650HX: 温度阈值 70/78/88C, 参考功耗 160W(PL2=157W)
-      draw_text16x24(8, 48, "CPU", 0xFFFF);
+      // 2. CPU 区域 (y = 48 ~ 99)
+      draw_text(8, 48, "CPU", 0xFFFF);
       char cpu_str[8]; snprintf(cpu_str, sizeof(cpu_str), "%2d%%", cpu > 99 ? 99 : cpu);
-      draw_text16x24(80, 48, cpu_str, usage_color(cpu));
+      draw_text(80, 48, cpu_str, usage_color(cpu));
 
       char cpu_tstr[8]; snprintf(cpu_tstr, sizeof(cpu_tstr), "%2.0fC", cpu_t > 99 ? 99 : cpu_t);
-      draw_text16x24(150, 48, cpu_tstr, temp_color(cpu_t, 70, 78, 88));
+      draw_text(150, 48, cpu_tstr, temp_color(cpu_t, 70, 78, 88));
       char cpu_wstr[8]; snprintf(cpu_wstr, sizeof(cpu_wstr), "%2.0fW", cpu_w);
-      draw_text16x24(222, 48, cpu_wstr, pwr_color(cpu_w, 160));
+      draw_text(222, 48, cpu_wstr, pwr_color(cpu_w, 160));
       draw_bar(8, 85, 304, 14, cpu, usage_color(cpu));
 
-      // 3. GPU 区域 (y=104 ~ 155)  笔记本独显: 温度阈值 60/75/85C, 参考功耗 150W
-      draw_text16x24(8, 104, "GPU", 0xFFFF);
+      // 3. GPU 区域 (y = 104 ~ 155)
+      draw_text(8, 104, "GPU", 0xFFFF);
       if (gpu_use >= 0) {
         char gpu_str[8]; snprintf(gpu_str, sizeof(gpu_str), "%2d%%", gpu_use > 99 ? 99 : gpu_use);
-        draw_text16x24(80, 104, gpu_str, usage_color(gpu_use));
+        draw_text(80, 104, gpu_str, usage_color(gpu_use));
       } else {
         fill_rect(80, 104, 66, 33, 0x0000);
       }
 
       char gpu_tstr[8]; snprintf(gpu_tstr, sizeof(gpu_tstr), "%2.0fC", gpu_t > 99 ? 99 : gpu_t);
-      draw_text16x24(150, 104, gpu_tstr, temp_color(gpu_t, 60, 75, 85));
+      draw_text(150, 104, gpu_tstr, temp_color(gpu_t, 60, 75, 85));
       char gpu_wstr[8]; snprintf(gpu_wstr, sizeof(gpu_wstr), "%2.0fW", gpu_w);
-      draw_text16x24(222, 104, gpu_wstr, pwr_color(gpu_w, 150));
+      draw_text(222, 104, gpu_wstr, pwr_color(gpu_w, 150));
       int bar_val = (gpu_use >= 0) ? gpu_use : (int)(gpu_w / 1.5);
-      draw_bar(8, 141, 304, 14, bar_val,
-               (gpu_use >= 0) ? usage_color(gpu_use) : pwr_color(gpu_w, 150));
+      draw_bar(8, 141, 304, 14, bar_val, (gpu_use >= 0) ? usage_color(gpu_use) : pwr_color(gpu_w, 150));
 
-      // 4. MEM 区域 (y=160 ~ 211)
-      draw_text16x24(8, 160, "MEM", 0xFFFF);
+      // 4. MEM / 风扇 区域 (y = 160 ~ 211)
+      draw_text(8, 160, "MEM", 0xFFFF);
       char mem_str[8]; snprintf(mem_str, sizeof(mem_str), "%2d%%", mem > 99 ? 99 : mem);
-      draw_text16x24(80, 160, mem_str, usage_color(mem));
+      draw_text(80, 160, mem_str, usage_color(mem));
+
+      if (fan_cpu > 0) {
+        char fan_str[10]; snprintf(fan_str, sizeof(fan_str), "%4dR", fan_cpu);
+        draw_text(180, 160, fan_str, 0x07FF);
+      } else {
+        fill_rect(180, 160, 110, 33, 0x0000);
+      }
       draw_bar(8, 197, 304, 14, mem, usage_color(mem));
     }
   }
@@ -622,7 +623,7 @@ void loop() {
     delay(500);
     BLEDevice::startAdvertising();
     fill_rect(0, 0, 320, 240, 0x0000);
-    draw_text16x24(12, 100, "BLE WAITING...", 0x07FF);
+    draw_text(12, 100, "BLE WAITING...", 0x07FF);
     oldDeviceConnected = deviceConnected;
   }
   if (deviceConnected && !oldDeviceConnected) {
