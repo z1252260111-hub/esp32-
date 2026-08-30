@@ -1,0 +1,2 @@
+D:\ai working\esp32\06_ble_widget\tools\bin\EtwFpsHelper.pdb
+D:\ai working\esp32\06_ble_widget\tools\bin\EtwFpsHelper.exe

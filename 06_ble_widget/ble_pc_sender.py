@@ -2,23 +2,23 @@
 """
 ESP32 华硕笔记本状态信息监控副屏 - 低功耗蓝牙 (BLE) 极速发射服务
 特性：
-1. 深度对接华硕 G-Helper 体系：直读 ASUS ATKACPI 嵌入式控制器（CPU温度、风扇转速、性能模式）
+1. 深度对接华硕 G-Helper 体系：直读 ASUS ATKACPI 嵌入式控制器（CPU温度、性能模式）
 2. NVIDIA NVML 显卡底层直读：毫秒级采集 GPU 温度、实时功耗 (W)、GPU 占用率
-3. Windows Energy Meter RAPL / AIDA64 双轨采集 CPU Package 封装功耗 (W)
-4. 游戏实时帧率 (FPS) 引擎：Windows ETW (Microsoft-Windows-DxgKrnl) + RTSS 共享内存 + AIDA64 多重采集
+3. Windows Energy Meter RAPL 双轨采集 CPU Package 封装功耗 (W)
+4. 游戏实时帧率 (FPS) 引擎：原生 ETW 内核会话 (DxgKrnl Present) + RTSS + AIDA64 多源采集
 5. BLE 极速 GATT 广播推流，自动重连与无感恢复
 """
 
 import asyncio
 import ctypes
-from ctypes import wintypes, byref, Structure, POINTER
+from ctypes import wintypes, byref, Structure
 import json
 import mmap
 import os
 import re
 import struct
+import subprocess
 import sys
-import threading
 import time
 import winreg
 import psutil
@@ -47,10 +47,7 @@ CONTROL_CODE   = 0x0022240C
 DSTS           = 0x53545344
 INIT           = 0x54494E49
 DEV_CPU_TEMP   = 0x00120094
-DEV_GPU_TEMP   = 0x00120097
 DEV_PERF_MODE  = 0x00120075
-DEV_CPU_FAN    = 0x00110013
-DEV_GPU_FAN    = 0x00110014
 
 kernel32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
                                  ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p]
@@ -72,7 +69,6 @@ class AsusAcpiReader:
             if not self.handle or self.handle == ctypes.c_void_p(-1).value:
                 self.handle = None
             else:
-                # INIT 调用
                 buf = struct.pack("<II", INIT, 8) + b"\x00" * 8
                 out = ctypes.create_string_buffer(16)
                 ret = wintypes.DWORD(0)
@@ -107,7 +103,6 @@ class AsusAcpiReader:
         modes = {0: "BALANCED", 1: "TURBO", 2: "SILENT", 3: "FULL", 4: "MANUAL"}
         if m is not None and m in modes:
             return modes[m]
-        # 兜底从 G-Helper 配置文件读取
         try:
             cfg_path = os.path.expandvars(r'%APPDATA%\GHelper\config.json')
             if os.path.exists(cfg_path):
@@ -150,7 +145,7 @@ class GpuReader:
             return None, None, None
 
 
-# ==================== 3. CPU 功耗 (RAPL / PDH / AIDA64) ====================
+# ==================== 3. CPU 功耗 (RAPL / PDH) ====================
 class CpuPowerReader:
     def __init__(self):
         self.pdh_query = None
@@ -162,7 +157,6 @@ class CpuPowerReader:
             import win32pdh
             self.win32pdh = win32pdh
             hq = win32pdh.OpenQuery()
-            # 常见 RAPL 实例路径（与 G-Helper 相同顺序）
             for inst in ["RAPL_Package0_PKG", "Apu Power", "CPU Power", "Socket Power", "Current Socket Power"]:
                 try:
                     path = f"\\Energy Meter({inst})\\Power"
@@ -182,7 +176,6 @@ class CpuPowerReader:
                 self.win32pdh.CollectQueryData(self.pdh_query)
                 _, val = self.win32pdh.GetFormattedCounterValue(self.pdh_counter, self.win32pdh.PDH_FMT_DOUBLE)
                 if val > 0:
-                    # 性能计数器单位通常为毫瓦(mW)，若大于 500 则除以 1000
                     if val > 500:
                         return val / 1000.0
                     return val
@@ -192,218 +185,29 @@ class CpuPowerReader:
 
 
 # ==================== 4. 游戏实时帧率 (FPS) 引擎 ====================
-class GUID(ctypes.Structure):
-    _fields_ = [
-        ("Data1", wintypes.DWORD),
-        ("Data2", wintypes.WORD),
-        ("Data3", wintypes.WORD),
-        ("Data4", ctypes.c_ubyte * 8)
-    ]
-    def __init__(self, guid_str):
-        super().__init__()
-        import uuid
-        u = uuid.UUID(guid_str)
-        self.Data1 = u.time_low
-        self.Data2 = u.time_mid
-        self.Data3 = u.time_hi_version
-        for i, b in enumerate(u.bytes[8:]):
-            self.Data4[i] = b
-
-class WNODE_HEADER(ctypes.Structure):
-    _fields_ = [
-        ("BufferSize", wintypes.ULONG),
-        ("ProviderId", wintypes.ULONG),
-        ("HistoricalContext", ctypes.c_ulonglong),
-        ("TimeStamp", ctypes.c_ulonglong),
-        ("Guid", GUID),
-        ("ClientContext", wintypes.ULONG),
-        ("Flags", wintypes.ULONG),
-    ]
-
-class EVENT_TRACE_PROPERTIES(ctypes.Structure):
-    _fields_ = [
-        ("Wnode", WNODE_HEADER),
-        ("BufferSize", wintypes.ULONG),
-        ("MinimumBuffers", wintypes.ULONG),
-        ("MaximumBuffers", wintypes.ULONG),
-        ("MaximumFileSize", wintypes.ULONG),
-        ("LogFileMode", wintypes.ULONG),
-        ("FlushTimer", wintypes.ULONG),
-        ("EnableFlags", wintypes.ULONG),
-        ("AgeLimit", wintypes.LONG),
-        ("NumberOfBuffers", wintypes.ULONG),
-        ("FreeBuffers", wintypes.ULONG),
-        ("EventsLost", wintypes.ULONG),
-        ("BuffersWritten", wintypes.ULONG),
-        ("LogBuffersLost", wintypes.ULONG),
-        ("RealTimeBuffersLost", wintypes.ULONG),
-        ("LoggerThreadId", wintypes.HANDLE),
-        ("LogFileNameOffset", wintypes.ULONG),
-        ("LoggerNameOffset", wintypes.ULONG),
-        ("LoggerName", ctypes.c_wchar * 1024),
-        ("LogFileName", ctypes.c_wchar * 1024),
-    ]
-
-class EVENT_HEADER(ctypes.Structure):
-    _fields_ = [
-        ("Size", wintypes.USHORT),
-        ("HeaderType", wintypes.USHORT),
-        ("Flags", wintypes.USHORT),
-        ("EventProperty", wintypes.USHORT),
-        ("ThreadId", wintypes.ULONG),
-        ("ProcessId", wintypes.ULONG),
-        ("TimeStamp", ctypes.c_int64),
-        ("ProviderId", GUID),
-        ("Id", wintypes.USHORT),
-        ("Version", ctypes.c_ubyte),
-        ("Channel", ctypes.c_ubyte),
-        ("Level", ctypes.c_ubyte),
-        ("Opcode", ctypes.c_ubyte),
-        ("Task", wintypes.USHORT),
-        ("Keyword", ctypes.c_uint64),
-        ("KernelTime", wintypes.ULONG),
-        ("UserTime", wintypes.ULONG),
-        ("ActivityId", GUID),
-    ]
-
-class EVENT_RECORD(ctypes.Structure):
-    _fields_ = [
-        ("EventHeader", EVENT_HEADER),
-        ("BufferContext", ctypes.c_ubyte * 4),
-        ("ExtendedDataCount", wintypes.USHORT),
-        ("UserDataLength", wintypes.USHORT),
-        ("ExtendedData", ctypes.c_void_p),
-        ("UserData", ctypes.c_void_p),
-        ("UserContext", ctypes.c_void_p),
-    ]
-
-EVENT_RECORD_CALLBACK = ctypes.WINFUNCTYPE(None, ctypes.POINTER(EVENT_RECORD))
-
-class EVENT_TRACE_LOGFILEW(ctypes.Structure):
-    _fields_ = [
-        ("LogFileName", wintypes.LPWSTR),
-        ("LoggerName", wintypes.LPWSTR),
-        ("CurrentTime", ctypes.c_int64),
-        ("BuffersRead", wintypes.ULONG),
-        ("ProcessTraceMode", wintypes.ULONG),
-        ("CurrentEvent", EVENT_RECORD),
-        ("LogfileHeader", ctypes.c_byte * 280),
-        ("BufferCallback", ctypes.c_void_p),
-        ("BufferSize", wintypes.ULONG),
-        ("Filled", wintypes.ULONG),
-        ("EventsLost", wintypes.ULONG),
-        ("EventRecordCallback", EVENT_RECORD_CALLBACK),
-        ("IsKernelTrace", wintypes.ULONG),
-        ("Context", ctypes.c_void_p),
-    ]
-
 class FpsMonitor:
     def __init__(self):
-        self.current_fps = 0
-        self.target_pid = 0
-        self.last_fg_pid = 0
-        self.rolling_size = 360
-        self.frame_times = [0] * self.rolling_size
-        self.frame_head = 0
-        self.frames_filled = 0
-        self.session_handle = 0
-        self.trace_handle = 0
-        self.session_name = "Esp32BleFpsSession"
-        self.qpc_freq = ctypes.c_int64(0)
-        kernel32.QueryPerformanceFrequency(byref(self.qpc_freq))
+        self.shm = None
+        self._ensure_helper_running()
 
-        self.desktop_apps = {
-            "explorer", "shellexperiencehost", "searchhost", "taskmgr", "devenv", "code",
-            "chrome", "msedge", "firefox", "powershell", "pwsh", "cmd", "conhost", "windowsterminal"
-        }
-
-        self.running = True
-        self.th_etw = threading.Thread(target=self._etw_worker, daemon=True)
-        self.th_etw.start()
-        self.th_poll = threading.Thread(target=self._fps_poll_loop, daemon=True)
-        self.th_poll.start()
-
-    def _get_foreground_pid(self):
-        hwnd = user32.GetForegroundWindow()
-        if not hwnd:
-            return 0, ""
-        pid = wintypes.DWORD(0)
-        user32.GetWindowThreadProcessId(hwnd, byref(pid))
-        pname = ""
+    def _ensure_helper_running(self):
+        # 1. 检查共享内存是否已存在
         try:
-            p = psutil.Process(pid.value)
-            pname = p.name().lower().replace(".exe", "")
-        except Exception:
-            pass
-        return pid.value, pname
-
-    def _build_props(self):
-        p = EVENT_TRACE_PROPERTIES()
-        p.Wnode.BufferSize = ctypes.sizeof(EVENT_TRACE_PROPERTIES)
-        p.Wnode.Flags = 0x00020000
-        p.Wnode.ClientContext = 1
-        p.LogFileMode = 0x00000100
-        p.LoggerNameOffset = EVENT_TRACE_PROPERTIES.LoggerName.offset
-        p.BufferSize = 8
-        p.MinimumBuffers = 8
-        p.MaximumBuffers = 16
-        return p
-
-    def _on_event_record(self, record_ptr):
-        try:
-            record = record_ptr.contents
-            if record.EventHeader.Id != 184 and record.EventHeader.Id != 42:
-                return
-            pid = record.EventHeader.ProcessId
-            if pid <= 0 or pid != self.target_pid:
-                return
-            
-            ts = record.EventHeader.TimeStamp
-            self.frame_times[self.frame_head] = ts
-            self.frame_head = (self.frame_head + 1) % self.rolling_size
-            if self.frames_filled < self.rolling_size:
-                self.frames_filled += 1
+            self.shm = mmap.mmap(-1, 256, "Esp32FpsSharedMem", access=mmap.ACCESS_READ)
+            return
         except Exception:
             pass
 
-    def _etw_worker(self):
-        try:
-            stop_props = self._build_props()
-            advapi32.ControlTraceW(0, self.session_name, byref(stop_props), 1)
-
-            props = self._build_props()
-            handle = ctypes.c_int64(0)
-            hr = advapi32.StartTraceW(byref(handle), self.session_name, byref(props))
-            if hr != 0:
-                return
-
-            self.session_handle = handle.value
-            provider_guid = GUID("802EC45A-1E99-4B83-9920-87C98277BA9D")
-            advapi32.EnableTraceEx2(self.session_handle, byref(provider_guid), 1, 4, 0x0000000008000000, 0, 0, None)
-
-            self._cb_delegate = EVENT_RECORD_CALLBACK(self._on_event_record)
-            logfile = EVENT_TRACE_LOGFILEW()
-            logfile.LoggerName = self.session_name
-            logfile.ProcessTraceMode = 0x00000100 | 0x10000000 | 0x00001000
-            logfile.EventRecordCallback = self._cb_delegate
-
-            trace_handle = advapi32.OpenTraceW(byref(logfile))
-            if trace_handle == -1 or trace_handle == 0:
-                return
-            self.trace_handle = trace_handle
-
-            def flush_loop():
-                while self.running and self.session_handle:
-                    time.sleep(0.2)
-                    p = self._build_props()
-                    advapi32.ControlTraceW(self.session_handle, None, byref(p), 3)
-
-            threading.Thread(target=flush_loop, daemon=True).start()
-
-            handles = (ctypes.c_int64 * 1)(self.trace_handle)
-            advapi32.ProcessTrace(handles, 1, None, None)
-        except Exception:
-            pass
+        # 2. 若未运行，尝试启动 tools/bin/EtwFpsHelper.exe
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        exe_path = os.path.join(base_dir, "tools", "bin", "EtwFpsHelper.exe")
+        if os.path.exists(exe_path):
+            try:
+                subprocess.Popen([exe_path], creationflags=subprocess.CREATE_NO_WINDOW)
+                time.sleep(0.5)
+                self.shm = mmap.mmap(-1, 256, "Esp32FpsSharedMem", access=mmap.ACCESS_READ)
+            except Exception:
+                pass
 
     def _read_rtss_fps(self):
         try:
@@ -417,59 +221,31 @@ class FpsMonitor:
             pass
         return None
 
-    def _fps_poll_loop(self):
-        while self.running:
-            time.sleep(0.4)
-            pid, pname = self._get_foreground_pid()
-
-            # 1. 尝试 RTSS
-            rtss_fps = self._read_rtss_fps()
-            if rtss_fps is not None and rtss_fps > 0:
-                self.current_fps = int(rtss_fps)
-                continue
-
-            # 2. 检查前台进程
-            if pid != self.last_fg_pid:
-                self.last_fg_pid = pid
-                if pname in self.desktop_apps or pid <= 0:
-                    self.target_pid = 0
-                    self.current_fps = 0
-                else:
-                    self.target_pid = pid
-                    self.frame_head = 0
-                    self.frames_filled = 0
-
-            # 3. 计算 ETW FPS
-            if self.target_pid > 0 and self.frames_filled >= 2:
-                qpc_now = ctypes.c_int64(0)
-                kernel32.QueryPerformanceCounter(byref(qpc_now))
-                freq = self.qpc_freq.value
-
-                head = self.frame_head
-                newest = self.frame_times[(head - 1 + self.rolling_size) % self.rolling_size]
-
-                if (qpc_now.value - newest) > 3 * freq:
-                    self.current_fps = 0
-                else:
-                    cutoff = newest - freq
-                    count = 1
-                    oldest = newest
-                    for i in range(2, self.frames_filled + 1):
-                        t = self.frame_times[(head - i + self.rolling_size) % self.rolling_size]
-                        if t < cutoff:
-                            break
-                        oldest = t
-                        count += 1
-                    elapsed = (newest - oldest) / freq
-                    if elapsed > 0:
-                        self.current_fps = int(round((count - 1) / elapsed))
-                    else:
-                        self.current_fps = 0
-            else:
-                self.current_fps = 0
-
     def get_fps(self):
-        return self.current_fps
+        # 1. 优先读取 ETW 共享内存
+        if self.shm is None:
+            try:
+                self.shm = mmap.mmap(-1, 256, "Esp32FpsSharedMem", access=mmap.ACCESS_READ)
+            except Exception:
+                pass
+
+        if self.shm is not None:
+            try:
+                self.shm.seek(0)
+                raw = self.shm.read(8)
+                if len(raw) == 8:
+                    fps, pid = struct.unpack("<ii", raw)
+                    if fps > 0:
+                        return fps
+            except Exception:
+                self.shm = None
+
+        # 2. RTSS 兜底
+        rtss = self._read_rtss_fps()
+        if rtss is not None and rtss > 0:
+            return rtss
+
+        return 0
 
 
 # ==================== 5. AIDA64 注册表兜底读取 ====================
@@ -568,6 +344,7 @@ async def run_ble_sender():
     print(f"[配置] 华硕 ATKACPI: {'已就绪' if acpi_reader.handle else '未就绪 (请以管理员身份运行)'}")
     print(f"[配置] NVIDIA NVML:  {'已就绪' if gpu_reader.available else '未检测到 NVIDIA 显卡'}")
     print(f"[配置] CPU 功耗引擎: {'已连接 RAPL' if cpu_power_reader.pdh_query else 'AIDA64 兜底'}")
+    print(f"[配置] 游戏 FPS 引擎: {'ETW 内核服务已就绪' if fps_monitor.shm else 'RTSS / AIDA64 兜底'}")
     print(f"[配置] 性能模式:     {acpi_reader.get_mode()}")
     print("=" * 65)
 
