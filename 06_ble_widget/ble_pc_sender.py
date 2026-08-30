@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-ESP32 华硕笔记本状态信息监控副屏 - 低功耗蓝牙 (BLE) 极速发射服务
+ESP32 华硕笔记本状态信息监控副屏 - 低功耗蓝牙 (BLE) 极速发射服务 (G-Helper 协同版)
 特性：
 1. 深度对接华硕 G-Helper 体系：直读 ASUS ATKACPI 嵌入式控制器（CPU温度、性能模式）
 2. NVIDIA NVML 显卡底层直读：毫秒级采集 GPU 温度、实时功耗 (W)、GPU 占用率
-3. Windows Energy Meter RAPL 双轨采集 CPU Package 封装功耗 (W)
-4. 游戏实时帧率 (FPS) 引擎：原生 ETW 内核会话 (DxgKrnl Present) + RTSS + AIDA64 多源采集
+3. Windows Energy Meter RAPL 采集 CPU Package 封装功耗 (W)
+4. 多源游戏 FPS 读取：支持 RTSS (RivaTuner) / AIDA64，绝不抢占或冲突 G-Helper 自身的 ETW 会话
 5. BLE 极速 GATT 广播推流，自动重连与无感恢复
 """
 
@@ -17,7 +17,6 @@ import mmap
 import os
 import re
 import struct
-import subprocess
 import sys
 import time
 import winreg
@@ -27,7 +26,6 @@ from bleak import BleakScanner, BleakClient
 # ==================== Win32 基础接口 ====================
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 user32 = ctypes.WinDLL("user32", use_last_error=True)
-advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
 
 # 强制 UTF-8 输出
 if sys.platform.startswith('win'):
@@ -184,31 +182,8 @@ class CpuPowerReader:
         return None
 
 
-# ==================== 4. 游戏实时帧率 (FPS) 引擎 ====================
+# ==================== 4. RTSS / AIDA64 FPS 读取 ====================
 class FpsMonitor:
-    def __init__(self):
-        self.shm = None
-        self._ensure_helper_running()
-
-    def _ensure_helper_running(self):
-        # 1. 检查共享内存是否已存在
-        try:
-            self.shm = mmap.mmap(-1, 256, "Esp32FpsSharedMem", access=mmap.ACCESS_READ)
-            return
-        except Exception:
-            pass
-
-        # 2. 若未运行，尝试启动 tools/bin/EtwFpsHelper.exe
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        exe_path = os.path.join(base_dir, "tools", "bin", "EtwFpsHelper.exe")
-        if os.path.exists(exe_path):
-            try:
-                subprocess.Popen([exe_path], creationflags=subprocess.CREATE_NO_WINDOW)
-                time.sleep(0.5)
-                self.shm = mmap.mmap(-1, 256, "Esp32FpsSharedMem", access=mmap.ACCESS_READ)
-            except Exception:
-                pass
-
     def _read_rtss_fps(self):
         try:
             shm = mmap.mmap(-1, 1024*64, 'Global\\RTSSSharedMemoryV2', access=mmap.ACCESS_READ)
@@ -219,33 +194,10 @@ class FpsMonitor:
                 return fps
         except Exception:
             pass
-        return None
+        return 0
 
     def get_fps(self):
-        # 1. 优先读取 ETW 共享内存
-        if self.shm is None:
-            try:
-                self.shm = mmap.mmap(-1, 256, "Esp32FpsSharedMem", access=mmap.ACCESS_READ)
-            except Exception:
-                pass
-
-        if self.shm is not None:
-            try:
-                self.shm.seek(0)
-                raw = self.shm.read(8)
-                if len(raw) == 8:
-                    fps, pid = struct.unpack("<ii", raw)
-                    if fps > 0:
-                        return fps
-            except Exception:
-                self.shm = None
-
-        # 2. RTSS 兜底
-        rtss = self._read_rtss_fps()
-        if rtss is not None and rtss > 0:
-            return rtss
-
-        return 0
+        return self._read_rtss_fps()
 
 
 # ==================== 5. AIDA64 注册表兜底读取 ====================
@@ -288,7 +240,6 @@ cpu_power_reader = CpuPowerReader()
 fps_monitor = FpsMonitor()
 
 def get_stats_json():
-    # 基础系统数据
     cpu_percent = int(psutil.cpu_percent(interval=None))
     mem_percent = int(psutil.virtual_memory().percent)
 
@@ -339,12 +290,11 @@ def get_stats_json():
 # ==================== 7. BLE 发送主循环 ====================
 async def run_ble_sender():
     print("=" * 65)
-    print("  ESP32 华硕副屏 - BLE 蓝牙极速发射器 (G-Helper & FPS 增强版)")
+    print("  ESP32 华硕副屏 - BLE 蓝牙极速发射器 (G-Helper 协同版)")
     print("=" * 65)
     print(f"[配置] 华硕 ATKACPI: {'已就绪' if acpi_reader.handle else '未就绪 (请以管理员身份运行)'}")
     print(f"[配置] NVIDIA NVML:  {'已就绪' if gpu_reader.available else '未检测到 NVIDIA 显卡'}")
     print(f"[配置] CPU 功耗引擎: {'已连接 RAPL' if cpu_power_reader.pdh_query else 'AIDA64 兜底'}")
-    print(f"[配置] 游戏 FPS 引擎: {'ETW 内核服务已就绪' if fps_monitor.shm else 'RTSS / AIDA64 兜底'}")
     print(f"[配置] 性能模式:     {acpi_reader.get_mode()}")
     print("=" * 65)
 
@@ -367,7 +317,7 @@ async def run_ble_sender():
 
         try:
             async with BleakClient(device) as client:
-                print("[成功] 蓝牙连接成功！开始以 0.3s 极速推流硬件状态与游戏帧率...\n")
+                print("[成功] 蓝牙连接成功！开始以 0.3s 极速推流硬件状态...\n")
                 while client.is_connected:
                     raw_json = get_stats_json()
                     await client.write_gatt_char(CHARACTERISTIC_UUID, raw_json.encode('utf-8'), response=False)
