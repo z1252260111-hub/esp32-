@@ -1,0 +1,40 @@
+# Python 缓存与虚拟环境
+__pycache__/
+*.py[cod]
+*.class
+*.env
+.venv/
+venv/
+env/
+
+# 临时与测试文件
+.write_test.txt
+*.tmp
+*.log
+
+# 操作系统与系统生成文件
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+.DS_Store
+
+# IDE 与编辑器配置
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Arduino / PlatformIO 编译产物
+build/
+.pio/
+*.bin
+*.elf
+*.hex
+
+# 第三方依赖与本地驱动备份（避免仓库冗余和子模块冲突）
+ghelper数据/
+驱动备份/
+ide/
