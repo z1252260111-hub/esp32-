@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-ESP32 华硕笔记本状态信息监控副屏 - 低功耗蓝牙 (BLE) 极速发射服务 (G-Helper 协同版)
+ESP32 华硕笔记本状态信息监控副屏 - 低功耗蓝牙 (BLE) 极速发射服务
 特性：
 1. 深度对接华硕 G-Helper 体系：直读 ASUS ATKACPI 嵌入式控制器（CPU温度、性能模式）
 2. NVIDIA NVML 显卡底层直读：毫秒级采集 GPU 温度、实时功耗 (W)、GPU 占用率
 3. Windows Energy Meter RAPL 采集 CPU Package 封装功耗 (W)
-4. 多源游戏 FPS 读取：支持 RTSS (RivaTuner) / AIDA64，绝不抢占或冲突 G-Helper 自身的 ETW 会话
+4. 高可靠游戏 FPS 引擎：原生对接 RTSS (RivaTuner) / AIDA64，0 内核冲突，与 G-Helper 完美共存
 5. BLE 极速 GATT 广播推流，自动重连与无感恢复
 """
 
@@ -17,6 +17,7 @@ import mmap
 import os
 import re
 import struct
+import subprocess
 import sys
 import time
 import winreg
@@ -182,22 +183,66 @@ class CpuPowerReader:
         return None
 
 
-# ==================== 4. RTSS / AIDA64 FPS 读取 ====================
+# ==================== 4. 游戏实时帧率 (FPS) 引擎 ====================
 class FpsMonitor:
-    def _read_rtss_fps(self):
+    def __init__(self):
+        self._ensure_rtss_started()
+
+    def _ensure_rtss_started(self):
+        # 如果 RTSS 未运行，尝试在后台拉起
         try:
-            shm = mmap.mmap(-1, 1024*64, 'Global\\RTSSSharedMemoryV2', access=mmap.ACCESS_READ)
-            sig = shm.read(4)
-            if sig == b'RTSS':
-                shm.seek(32)
-                fps = struct.unpack('<I', shm.read(4))[0]
-                return fps
+            rtss_running = any('rtss' in p.info['name'].lower() for p in psutil.process_iter(['name']))
+            if not rtss_running:
+                for path in [
+                    r"C:\Program Files (x86)\RivaTuner Statistics Server\RTSS.exe",
+                    r"C:\Program Files\RivaTuner Statistics Server\RTSS.exe",
+                ]:
+                    if os.path.exists(path):
+                        subprocess.Popen([path], creationflags=subprocess.CREATE_NO_WINDOW)
+                        break
+        except Exception:
+            pass
+
+    def _read_rtss(self):
+        try:
+            shm = mmap.mmap(-1, 65536, "Global\\RTSSSharedMemoryV2", access=mmap.ACCESS_READ)
+            header = shm.read(32)
+            sig, ver, entry_size, arr_offset, arr_size = struct.unpack("<IIIII", header[:20])
+            if sig != 0x53535452:  # 'RTSS'
+                return 0
+            
+            # 遍历运行中的渲染进程
+            for i in range(arr_size):
+                shm.seek(arr_offset + i * entry_size)
+                entry = shm.read(entry_size)
+                if len(entry) < 284:
+                    continue
+                pid = struct.unpack("<I", entry[260:264])[0]
+                if pid > 0:
+                    frametime = struct.unpack("<I", entry[276:280])[0]  # 微秒
+                    if frametime > 0 and frametime < 200000:
+                        fps = int(round(1000000.0 / frametime))
+                        if 5 <= fps <= 999:
+                            return fps
+                    # 备用帧计数率
+                    frames = struct.unpack("<I", entry[272:276])[0]
+                    time0 = struct.unpack("<I", entry[264:268])[0]
+                    time1 = struct.unpack("<I", entry[268:272])[0]
+                    dt = time1 - time0
+                    if dt > 0 and frames > 0:
+                        calc_fps = int(round(frames * 1000.0 / dt))
+                        if 5 <= calc_fps <= 999:
+                            return calc_fps
         except Exception:
             pass
         return 0
 
     def get_fps(self):
-        return self._read_rtss_fps()
+        # 1. 优先读取 RTSS 共享内存
+        fps = self._read_rtss()
+        if fps > 0:
+            return fps
+        return 0
 
 
 # ==================== 5. AIDA64 注册表兜底读取 ====================
@@ -317,7 +362,7 @@ async def run_ble_sender():
 
         try:
             async with BleakClient(device) as client:
-                print("[成功] 蓝牙连接成功！开始以 0.3s 极速推流硬件状态...\n")
+                print("[成功] 蓝牙连接成功！开始以 0.3s 极速推流硬件状态与游戏帧率...\n")
                 while client.is_connected:
                     raw_json = get_stats_json()
                     await client.write_gatt_char(CHARACTERISTIC_UUID, raw_json.encode('utf-8'), response=False)
