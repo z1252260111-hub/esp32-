@@ -1,16 +1,16 @@
 @echo off
-title ESP32 BLE 发射器 (G-Helper & FPS)
+title ESP32 BLE Sender (G-Helper & FPS)
 
-:: 检查管理员权限，若无则通过 PowerShell 请求 UAC 提权
+:: Check administrator privileges, request UAC elevation if needed
 net session >nul 2>&1
 if %errorLevel% NEQ 0 (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd.exe -ArgumentList '/k ""%~dpnx0""' -Verb RunAs"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
     exit /b
 )
 
 cd /d "%~dp0"
 echo ========================================================
-echo   ESP32 华硕笔记本副屏 - BLE 发射器 (G-Helper & FPS)
+echo   ESP32 ASUS Laptop Dashboard - BLE Sender
 echo ========================================================
 echo.
 
