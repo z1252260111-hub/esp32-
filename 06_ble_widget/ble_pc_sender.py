@@ -102,22 +102,6 @@ class AsusAcpiReader:
             return t
         return None
 
-    def get_cpu_fan(self):
-        f = self.device_get(DEV_CPU_FAN)
-        if f is not None:
-            raw = f & 0xFFFF
-            if raw > 0 and raw < 150:
-                return raw * 100
-        return None
-
-    def get_gpu_fan(self):
-        f = self.device_get(DEV_GPU_FAN)
-        if f is not None:
-            raw = f & 0xFFFF
-            if raw > 0 and raw < 150:
-                return raw * 100
-        return None
-
     def get_mode(self):
         m = self.device_get(DEV_PERF_MODE)
         modes = {0: "BALANCED", 1: "TURBO", 2: "SILENT", 3: "FULL", 4: "MANUAL"}
@@ -178,15 +162,10 @@ class CpuPowerReader:
             import win32pdh
             self.win32pdh = win32pdh
             hq = win32pdh.OpenQuery()
-            # 常见 RAPL 路径
-            for path in [
-                r"\Energy Meter\Power",
-                r"\Energy Meter(*)\Power",
-                r"\能量计\功率",
-                r"\Energy Meter\Power(Apu Power)",
-                r"\Energy Meter\Power(RAPL_Package0_PKG)"
-            ]:
+            # 常见 RAPL 实例路径（与 G-Helper 相同顺序）
+            for inst in ["RAPL_Package0_PKG", "Apu Power", "CPU Power", "Socket Power", "Current Socket Power"]:
                 try:
+                    path = f"\\Energy Meter({inst})\\Power"
                     hc = win32pdh.AddEnglishCounter(hq, path)
                     self.pdh_query = hq
                     self.pdh_counter = hc
@@ -203,15 +182,16 @@ class CpuPowerReader:
                 self.win32pdh.CollectQueryData(self.pdh_query)
                 _, val = self.win32pdh.GetFormattedCounterValue(self.pdh_counter, self.win32pdh.PDH_FMT_DOUBLE)
                 if val > 0:
-                    return float(val)
+                    # 性能计数器单位通常为毫瓦(mW)，若大于 500 则除以 1000
+                    if val > 500:
+                        return val / 1000.0
+                    return val
             except Exception:
                 pass
         return None
 
 
 # ==================== 4. 游戏实时帧率 (FPS) 引擎 ====================
-# 支持: 1. Windows ETW (DxgKrnl Present)  2. RTSS 共享内存  3. AIDA64 注册表
-
 class GUID(ctypes.Structure):
     _fields_ = [
         ("Data1", wintypes.DWORD),
@@ -332,13 +312,11 @@ class FpsMonitor:
         self.qpc_freq = ctypes.c_int64(0)
         kernel32.QueryPerformanceFrequency(byref(self.qpc_freq))
 
-        # 桌面黑名单进程（不当做游戏测 FPS）
         self.desktop_apps = {
             "explorer", "shellexperiencehost", "searchhost", "taskmgr", "devenv", "code",
             "chrome", "msedge", "firefox", "powershell", "pwsh", "cmd", "conhost", "windowsterminal"
         }
 
-        # 启动后台线程监听
         self.running = True
         self.th_etw = threading.Thread(target=self._etw_worker, daemon=True)
         self.th_etw.start()
@@ -363,8 +341,8 @@ class FpsMonitor:
         p = EVENT_TRACE_PROPERTIES()
         p.Wnode.BufferSize = ctypes.sizeof(EVENT_TRACE_PROPERTIES)
         p.Wnode.Flags = 0x00020000
-        p.Wnode.ClientContext = 1 # QPC
-        p.LogFileMode = 0x00000100 # REAL_TIME
+        p.Wnode.ClientContext = 1
+        p.LogFileMode = 0x00000100
         p.LoggerNameOffset = EVENT_TRACE_PROPERTIES.LoggerName.offset
         p.BufferSize = 8
         p.MinimumBuffers = 8
@@ -390,7 +368,6 @@ class FpsMonitor:
 
     def _etw_worker(self):
         try:
-            # 停止旧会话
             stop_props = self._build_props()
             advapi32.ControlTraceW(0, self.session_name, byref(stop_props), 1)
 
@@ -398,15 +375,12 @@ class FpsMonitor:
             handle = ctypes.c_int64(0)
             hr = advapi32.StartTraceW(byref(handle), self.session_name, byref(props))
             if hr != 0:
-                # 无管理员权限或已被占用
                 return
 
             self.session_handle = handle.value
             provider_guid = GUID("802EC45A-1E99-4B83-9920-87C98277BA9D")
-            # 启用 DxgKrnl
             advapi32.EnableTraceEx2(self.session_handle, byref(provider_guid), 1, 4, 0x0000000008000000, 0, 0, None)
 
-            # 打开跟踪
             self._cb_delegate = EVENT_RECORD_CALLBACK(self._on_event_record)
             logfile = EVENT_TRACE_LOGFILEW()
             logfile.LoggerName = self.session_name
@@ -418,12 +392,11 @@ class FpsMonitor:
                 return
             self.trace_handle = trace_handle
 
-            # 刷新定时器
             def flush_loop():
                 while self.running and self.session_handle:
                     time.sleep(0.2)
                     p = self._build_props()
-                    advapi32.ControlTraceW(self.session_handle, None, byref(p), 3) # FLUSH
+                    advapi32.ControlTraceW(self.session_handle, None, byref(p), 3)
 
             threading.Thread(target=flush_loop, daemon=True).start()
 
@@ -543,10 +516,8 @@ def get_stats_json():
     cpu_percent = int(psutil.cpu_percent(interval=None))
     mem_percent = int(psutil.virtual_memory().percent)
 
-    # 1. 华硕 EC 读 CPU 温度、风扇与性能模式
+    # 1. 华硕 EC 读 CPU 温度与性能模式
     cpu_temp = acpi_reader.get_cpu_temp()
-    fan_cpu = acpi_reader.get_cpu_fan()
-    fan_gpu = acpi_reader.get_gpu_fan()
     mode = acpi_reader.get_mode()
 
     # 2. NVML 读 GPU
@@ -562,7 +533,7 @@ def get_stats_json():
     aida = read_aida64_fallback()
     if cpu_temp is None:
         cpu_temp = aida.get("cpu_temp", 0)
-    if cpu_pwr is None:
+    if cpu_pwr is None or cpu_pwr <= 0:
         cpu_pwr = aida.get("cpu_pwr", 0)
     if gpu_temp is None:
         gpu_temp = aida.get("gpu_temp", 0)
@@ -583,8 +554,6 @@ def get_stats_json():
         "gpu_pwr": int(round(gpu_pwr)) if gpu_pwr else 0,
         "gpu_usage": int(round(gpu_usage)) if gpu_usage is not None and gpu_usage >= 0 else -1,
         "mode": mode,
-        "fan_cpu": fan_cpu or 0,
-        "fan_gpu": fan_gpu or 0,
         "time": time.strftime("%H:%M:%S")
     }
 
@@ -598,6 +567,7 @@ async def run_ble_sender():
     print("=" * 65)
     print(f"[配置] 华硕 ATKACPI: {'已就绪' if acpi_reader.handle else '未就绪 (请以管理员身份运行)'}")
     print(f"[配置] NVIDIA NVML:  {'已就绪' if gpu_reader.available else '未检测到 NVIDIA 显卡'}")
+    print(f"[配置] CPU 功耗引擎: {'已连接 RAPL' if cpu_power_reader.pdh_query else 'AIDA64 兜底'}")
     print(f"[配置] 性能模式:     {acpi_reader.get_mode()}")
     print("=" * 65)
 
