@@ -1,0 +1,19 @@
+@echo off
+title ESP32 BLE Sender (G-Helper & FPS)
+
+:: Check administrator privileges, request UAC elevation if needed
+net session >nul 2>&1
+if %errorLevel% NEQ 0 (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd.exe -ArgumentList '/k ""%~dpnx0""' -Verb RunAs"
+    exit /b
+)
+
+cd /d "%~dp0"
+echo ========================================================
+echo   ESP32 ASUS Laptop Dashboard - BLE Sender
+echo ========================================================
+echo.
+
+python ble_pc_sender.py
+
+pause
